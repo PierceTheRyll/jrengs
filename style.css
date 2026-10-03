@@ -63,7 +63,7 @@ body {
   transition: background-color .25s, color .25s;
   overflow-x: hidden;
 }
-img { max-width: 100%; display: block; }
+img { max-width: 100%; height: auto; display: block; }
 [hidden] { display: none !important; }
 a { color: inherit; }
 h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 400; text-transform: uppercase; line-height: 1; letter-spacing: .01em; }
@@ -233,7 +233,7 @@ section[id] { scroll-margin-top: 118px; }
 .hero-art .sunburst { inset: -12%; }
 .hero-art .main-img { position: absolute; z-index: 2; right: -3%; top: 0; width: 84%; transform: rotate(5deg); filter: drop-shadow(8px 12px 0 color-mix(in srgb, var(--shadow) 22%, transparent)); }
 .hero-art .side-img {
-  position: absolute; z-index: 3; left: -2%; bottom: 3%; width: 42%; aspect-ratio: 4 / 3; object-fit: cover;
+  position: absolute; z-index: 3; left: -2%; bottom: 3%; width: 42%; height: auto; aspect-ratio: 4 / 3; object-fit: cover;
   border: 3px solid var(--line); border-radius: 16px; box-shadow: 6px 6px 0 var(--shadow); transform: rotate(-5deg);
 }
 .hero-art .burst { position: absolute; z-index: 4; left: 0; top: 2%; width: 33%; font-size: clamp(1rem, 2.7vw, 1.45rem); transform: rotate(-8deg); }
@@ -272,7 +272,7 @@ section[id] { scroll-margin-top: 118px; }
 .about-photo { position: relative; max-width: 460px; margin-inline: auto; width: 100%; }
 .about-photo::before { content: ""; position: absolute; inset: 0; transform: translate(14px, 14px) rotate(2deg); background: var(--green-bg); border: 3px solid var(--line); border-radius: 24px; }
 .about-photo img {
-  position: relative; width: 100%; aspect-ratio: 4 / 3.4; object-fit: cover;
+  position: relative; width: 100%; height: auto; aspect-ratio: 4 / 3.4; object-fit: cover;
   border: 3px solid var(--line); border-radius: 24px; transform: rotate(-2deg);
 }
 .about-photo .burst { position: absolute; right: -10px; top: -26px; width: 118px; font-size: 1.1rem; transform: rotate(10deg); z-index: 2; }
