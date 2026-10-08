@@ -94,3 +94,12 @@ body.admin { min-height: 100vh; display: flex; flex-direction: column; }
   .admin-bar .btn { padding-inline: 12px; }
   .login-card { padding: 28px 20px 24px; }
 }
+
+/* ---------- mode chip, notices ---------- */
+.mode-chip { font-size: .8rem; padding: .15em .8em .1em; }
+.mode-chip.local { background: var(--yellow); color: #1c2a22; }
+.notice {
+  background: var(--yellow); color: #1c2a22; border: 2.5px solid var(--line); border-radius: 12px;
+  padding: 10px 14px; font-weight: 600; font-size: .92rem; text-align: left; margin: 0 0 16px;
+}
+.login-card .notice { margin: 0; }

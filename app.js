@@ -211,8 +211,12 @@
     return 'https://wa.me/' + CONTACT.wa + '?text=' + encodeURIComponent(waText(o));
   }
 
+  var submitBtn = $('#submit-btn');
+  var sending = false;
+
   form.addEventListener('submit', function (e) {
     e.preventDefault();
+    if (sending) return;
     msgEl.textContent = '';
 
     if (!cart.length) {
@@ -237,7 +241,7 @@
       return { id: l.id, name: p.name, price: p.price, qty: l.qty, level: l.level };
     });
     var order = {
-      id: store.nextId(),
+      id: store.newId(),
       createdAt: new Date().toISOString(),
       name: name,
       phone: phone,
@@ -247,17 +251,25 @@
       status: 'baru'
     };
 
-    if (!store.add(order)) {
-      msgEl.innerHTML = 'Pesanan belum bisa disimpan di perangkat ini. Kirim langsung lewat ' +
-        '<a href="' + waLink(order) + '" target="_blank" rel="noopener">WhatsApp ke Maria</a>.';
-      return;
-    }
+    sending = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Mengirim…';
 
-    cart = [];
-    persist(); renderCart();
-    form.reset();
-    setInvalid('name', false); setInvalid('phone', false);
-    showDone(order);
+    store.add(order).then(function () {
+      cart = [];
+      persist(); renderCart();
+      form.reset();
+      setInvalid('name', false); setInvalid('phone', false);
+      showDone(order);
+    }).catch(function (err) {
+      msgEl.innerHTML = 'Pesanan belum terkirim (' + esc(store.explain(err)) + ') ' +
+        'Pesananmu masih tersimpan di keranjang. Coba kirim lagi, atau langsung kirim lewat ' +
+        '<a href="' + waLink(order) + '" target="_blank" rel="noopener">WhatsApp ke Maria</a>.';
+    }).then(function () {
+      sending = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Kirim pesanan';
+    });
   });
 
   ['name', 'phone'].forEach(function (n) {

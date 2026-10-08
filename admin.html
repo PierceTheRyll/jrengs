@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="admin.css?v=4">
   <script>
     (function () {
       try {
@@ -57,9 +57,10 @@
         </div>
       </div>
       <p class="login-err" id="login-err" role="alert"></p>
-      <button class="btn btn--block" type="submit">Masuk</button>
+      <button class="btn btn--block" type="submit" id="login-submit">Masuk</button>
     </form>
 
+    <p class="notice" id="login-note" hidden>Mode lokal: Firebase belum diisi, jadi admin hanya melihat pesanan dari browser ini.</p>
     <a class="back-link" href="index.html">← Kembali ke situs</a>
   </div>
 </main>
@@ -70,6 +71,7 @@
     <div class="container">
       <a class="logo" href="index.html" aria-label="JRENGS — ke situs">JRENGS!</a>
       <span class="pill pill--green">Admin</span>
+      <span class="pill pill--green mode-chip" id="mode-chip">…</span>
       <span class="spacer"></span>
       <button class="icon-btn" type="button" data-theme-toggle aria-label="Ganti mode tampilan">
         <svg class="icon-moon" aria-hidden="true"><use href="#i-moon"/></svg>
@@ -82,6 +84,8 @@
 
   <main class="container dash">
     <h1>Pesanan Masuk</h1>
+
+    <p class="notice" id="dash-error" role="alert" hidden></p>
 
     <div class="stats" id="stats"></div>
 
@@ -97,7 +101,13 @@
   </main>
 </div>
 
-<script src="common.js"></script>
-<script src="admin.js"></script>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="firebase-config.js?v=4"></script>
+<script src="common.js?v=4"></script>
+<script src="admin.js?v=4"></script>
 </body>
 </html>

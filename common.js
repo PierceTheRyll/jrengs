@@ -1,10 +1,14 @@
-/* JRENGS — shared helpers: theme, formatting, order storage */
+/* JRENGS — shared helpers: theme, formatting, order storage.
+   Penyimpanan pesanan:
+   - Jika firebase-config.js sudah diisi  -> Firebase (Firestore + Authentication), pesanan terkumpul online.
+   - Jika belum diisi                     -> mode lokal (hanya di browser itu sendiri, untuk uji coba). */
 (function () {
   'use strict';
 
   var ORDERS_KEY = 'jrengs_orders_v1';
-  var SEQ_KEY = 'jrengs_seq_v1';
   var THEME_KEY = 'jrengs_theme';
+  var SESSION_KEY = 'jrengs_admin_session';
+  var LOCAL_PASS = 'cirengkeju21';      // hanya dipakai di mode lokal; mode Firebase memakai Authentication
 
   var CONTACT = {
     name: 'Maria',
@@ -18,17 +22,11 @@
     try {
       var raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : fallback;
-    } catch (e) {
-      return fallback;
-    }
+    } catch (e) { return fallback; }
   }
   function write(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-      return true;
-    } catch (e) {
-      return false;
-    }
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (e) { return false; }
   }
 
   /* ---------- formatting ---------- */
@@ -49,38 +47,198 @@
     });
   }
 
-  /* ---------- order storage ----------
-     Everything goes through this object, so the storage can later be
-     swapped for a real backend (API / database) without touching the UI. */
+  /* ---------- storage backend selection ---------- */
+  var cfg = window.JRENGS_FIREBASE || {};
+  var ADMIN_EMAIL = window.JRENGS_ADMIN_EMAIL || 'admin@jrengs.com';
+  var cloudConfigured = !!(cfg.apiKey && cfg.projectId &&
+    !/^ISI/i.test(cfg.apiKey) && !/^ISI/i.test(cfg.projectId));
+
+  var fb = null;
+  function cloud() {
+    if (fb) return fb;
+    if (!window.firebase) { var e = new Error('sdk'); e.code = 'jrengs/sdk'; throw e; }
+    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    fb = {
+      db: firebase.firestore(),
+      auth: typeof firebase.auth === 'function' ? firebase.auth() : null
+    };
+    return fb;
+  }
+
+  function withTimeout(promise, ms) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () {
+        var e = new Error('timeout'); e.code = 'jrengs/timeout'; reject(e);
+      }, ms);
+      promise.then(function (v) { clearTimeout(t); resolve(v); },
+                   function (er) { clearTimeout(t); reject(er); });
+    });
+  }
+  function attempt(fn) {              // run fn, always return a Promise
+    try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); }
+  }
+
+  /* order id: JR-<tanggal><bulan>-<4 karakter acak>, contoh JR-0810-K7QD */
+  function newId() {
+    var d = new Date();
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    var alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var buf = new Uint32Array(4), s = '', i;
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(buf);
+    else for (i = 0; i < 4; i++) buf[i] = Math.floor(Math.random() * 4294967296);
+    for (i = 0; i < 4; i++) s += alpha[buf[i] % alpha.length];
+    return 'JR-' + p(d.getDate()) + p(d.getMonth() + 1) + '-' + s;
+  }
+
+  function byNewest(a, b) {
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  }
+
+  /* ---------- local backend ---------- */
+  var localSubs = [];
+  var authWatchers = [];
+  function localList() {
+    var l = read(ORDERS_KEY, []);
+    return (Array.isArray(l) ? l : []).sort(byNewest);
+  }
+  function localNotify() {
+    var l = localList();
+    localSubs.forEach(function (f) { f(l); });
+  }
+  window.addEventListener('storage', function (e) {
+    if (e.key === ORDERS_KEY) localNotify();
+  });
+  function localSession() {
+    try { return sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setLocalSession(v) {
+    try { if (v) sessionStorage.setItem(SESSION_KEY, '1'); else sessionStorage.removeItem(SESSION_KEY); }
+    catch (e) { /* ignore */ }
+    authWatchers.forEach(function (f) { f(v); });
+  }
+
+  /* ---------- store (semua method mengembalikan Promise) ---------- */
   var store = {
-    list: function () {
-      var l = read(ORDERS_KEY, []);
-      return Array.isArray(l) ? l : [];
-    },
-    nextId: function () {
-      var n = Number(read(SEQ_KEY, 0)) + 1;
-      write(SEQ_KEY, n);
-      return 'JR-' + String(n).padStart(4, '0');
-    },
+    mode: cloudConfigured ? 'cloud' : 'local',
+    newId: newId,
+
     add: function (order) {
-      var l = store.list();
-      l.unshift(order);
-      return write(ORDERS_KEY, l);
-    },
-    update: function (id, patch) {
-      var l = store.list();
-      for (var i = 0; i < l.length; i++) {
-        if (l[i].id === id) { Object.assign(l[i], patch); break; }
+      if (cloudConfigured) {
+        return attempt(function () {
+          return withTimeout(cloud().db.collection('orders').doc(order.id).set(order), 15000);
+        });
       }
-      return write(ORDERS_KEY, l);
+      return attempt(function () {
+        var l = read(ORDERS_KEY, []);
+        if (!Array.isArray(l)) l = [];
+        l.unshift(order);
+        if (!write(ORDERS_KEY, l)) throw new Error('storage');
+        localNotify();
+      });
     },
+
+    update: function (id, patch) {
+      if (cloudConfigured) {
+        return attempt(function () { return cloud().db.collection('orders').doc(id).update(patch); });
+      }
+      return attempt(function () {
+        var l = read(ORDERS_KEY, []);
+        l.forEach(function (o) { if (o.id === id) Object.assign(o, patch); });
+        write(ORDERS_KEY, l);
+        localNotify();
+      });
+    },
+
     remove: function (id) {
-      return write(ORDERS_KEY, store.list().filter(function (o) { return o.id !== id; }));
+      if (cloudConfigured) {
+        return attempt(function () { return cloud().db.collection('orders').doc(id).delete(); });
+      }
+      return attempt(function () {
+        write(ORDERS_KEY, read(ORDERS_KEY, []).filter(function (o) { return o.id !== id; }));
+        localNotify();
+      });
     },
-    clear: function () {
-      return write(ORDERS_KEY, []);
+
+    /* langganan realtime; mengembalikan fungsi untuk berhenti */
+    subscribe: function (onData, onError) {
+      if (cloudConfigured) {
+        try {
+          return cloud().db.collection('orders').orderBy('createdAt', 'desc').onSnapshot(
+            function (snap) {
+              onData(snap.docs.map(function (d) { return Object.assign({}, d.data(), { id: d.id }); }));
+            },
+            function (err) { if (onError) onError(err); }
+          );
+        } catch (e) {
+          if (onError) onError(e);
+          return function () {};
+        }
+      }
+      localSubs.push(onData);
+      setTimeout(function () { onData(localList()); }, 0);
+      return function () { localSubs = localSubs.filter(function (f) { return f !== onData; }); };
     },
-    key: ORDERS_KEY
+
+    /* login admin */
+    login: function (user, pass) {
+      if (cloudConfigured) {
+        return attempt(function () {
+          if (String(user).trim().toLowerCase() !== 'admin') {
+            var e = new Error('bad user'); e.code = 'auth/invalid-credential'; throw e;
+          }
+          var a = cloud().auth;
+          if (!a) { var e2 = new Error('sdk'); e2.code = 'jrengs/sdk'; throw e2; }
+          return a.setPersistence(firebase.auth.Auth.Persistence.SESSION).then(function () {
+            return a.signInWithEmailAndPassword(ADMIN_EMAIL, pass);
+          });
+        });
+      }
+      return attempt(function () {
+        if (String(user).trim().toLowerCase() === 'admin' && pass === LOCAL_PASS) {
+          setLocalSession(true);
+          return;
+        }
+        var e = new Error('bad'); e.code = 'auth/invalid-credential'; throw e;
+      });
+    },
+
+    logout: function () {
+      if (cloudConfigured) {
+        return attempt(function () { var a = cloud().auth; return a ? a.signOut() : null; });
+      }
+      return attempt(function () { setLocalSession(false); });
+    },
+
+    /* pantau status login; cb(true/false) */
+    watchAuth: function (cb) {
+      if (cloudConfigured) {
+        try {
+          var a = cloud().auth;
+          if (!a) throw new Error('sdk');
+          return a.onAuthStateChanged(function (u) { cb(!!u); });
+        } catch (e) {
+          setTimeout(function () { cb(false); }, 0);
+          return function () {};
+        }
+      }
+      authWatchers.push(cb);
+      setTimeout(function () { cb(localSession()); }, 0);
+      return function () { authWatchers = authWatchers.filter(function (f) { return f !== cb; }); };
+    },
+
+    /* pesan error dalam bahasa Indonesia */
+    explain: function (err) {
+      var c = err && err.code ? String(err.code) : '';
+      if (c === 'auth/invalid-credential' || c === 'auth/wrong-password' || c === 'auth/user-not-found' ||
+          c === 'auth/invalid-login-credentials') return 'Username atau password salah.';
+      if (c === 'auth/too-many-requests') return 'Terlalu banyak percobaan. Tunggu beberapa menit lalu coba lagi.';
+      if (c === 'auth/network-request-failed' || c === 'unavailable') return 'Tidak ada koneksi internet.';
+      if (c === 'auth/operation-not-allowed') return 'Login Email/Password belum diaktifkan di Firebase.';
+      if (c === 'permission-denied') return 'Akses ditolak oleh aturan database (cek Rules di Firebase).';
+      if (c === 'jrengs/timeout') return 'Koneksi terlalu lambat.';
+      if (c === 'jrengs/sdk') return 'Firebase gagal dimuat. Cek koneksi internet lalu muat ulang halaman.';
+      return 'Terjadi kesalahan' + (c ? ' (' + c + ')' : '') + '.';
+    }
   };
 
   /* ---------- theme ---------- */
@@ -112,7 +270,6 @@
     });
   }
 
-  /* follow the OS setting only while the user has not chosen manually */
   if (window.matchMedia) {
     var mq = matchMedia('(prefers-color-scheme: dark)');
     var onChange = function () {

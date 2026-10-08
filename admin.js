@@ -1,13 +1,9 @@
-/* JRENGS — admin login + orders dashboard */
+/* JRENGS — admin login + orders dashboard (Firebase atau mode lokal) */
 (function () {
   'use strict';
 
   var J = window.JRENGS;
   var fmt = J.fmt, esc = J.esc, fmtDate = J.fmtDate, store = J.store;
-
-  var ADMIN_USER = 'admin';
-  var ADMIN_PASS = 'cirengkeju21';
-  var SESSION_KEY = 'jrengs_admin_session';
 
   var STATUS = {
     baru: 'Baru',
@@ -21,28 +17,101 @@
 
   var loginView = $('#login-view');
   var dashView = $('#dash-view');
+  var toastEl = $('#toast');
+  var toastTimer;
 
-  /* ---------- session ---------- */
-  function isLoggedIn() {
-    try { return sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { return false; }
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
   }
-  function setLoggedIn(v) {
+
+  /* ---------- mode (online / lokal) ---------- */
+  var chip = $('#mode-chip');
+  if (store.mode === 'cloud') {
+    chip.textContent = '● Online';
+    chip.title = 'Terhubung ke Firebase — pesanan dari semua perangkat masuk ke sini';
+  } else {
+    chip.textContent = 'Mode lokal';
+    chip.classList.add('local');
+    chip.title = 'Firebase belum diisi — hanya menampilkan pesanan dari browser ini';
+    $('#login-note').hidden = false;
+  }
+
+  /* ---------- dashboard data ---------- */
+  var cache = [];
+  var seen = null;
+  var unsubOrders = null;
+  var newCount = 0;
+  var baseTitle = 'Pesanan — Admin JRENGS!';
+
+  function beep() {
     try {
-      if (v) sessionStorage.setItem(SESSION_KEY, '1'); else sessionStorage.removeItem(SESSION_KEY);
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = new Ctx();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.15, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(); o.stop(ctx.currentTime + 0.5);
+      setTimeout(function () { ctx.close(); }, 800);
     } catch (e) { /* ignore */ }
   }
 
-  function show() {
-    var ok = isLoggedIn();
+  function showDashError(msg) {
+    var el = $('#dash-error');
+    el.textContent = msg || '';
+    el.hidden = !msg;
+  }
+
+  function startOrders() {
+    if (unsubOrders) return;
+    seen = null;
+    showDashError('');
+    unsubOrders = store.subscribe(function (list) {
+      var fresh = [];
+      if (seen) list.forEach(function (o) { if (!seen[o.id]) fresh.push(o); });
+      seen = {};
+      list.forEach(function (o) { seen[o.id] = 1; });
+      cache = list;
+      showDashError('');
+      render();
+      if (fresh.length) {
+        toast('Pesanan baru: ' + fresh[0].id + ' dari ' + fresh[0].name + (fresh.length > 1 ? ' (+' + (fresh.length - 1) + ' lagi)' : ''));
+        beep();
+        if (document.hidden) {
+          newCount += fresh.length;
+          document.title = '(' + newCount + ') ' + baseTitle;
+        }
+      }
+    }, function (err) {
+      showDashError('Tidak bisa memuat pesanan: ' + store.explain(err));
+    });
+  }
+  function stopOrders() {
+    if (unsubOrders) { unsubOrders(); unsubOrders = null; }
+    cache = [];
+    seen = null;
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { newCount = 0; document.title = baseTitle; }
+  });
+
+  /* ---------- auth state ---------- */
+  store.watchAuth(function (ok) {
     loginView.hidden = ok;
     dashView.hidden = !ok;
-    document.title = ok ? 'Pesanan — Admin JRENGS!' : 'Admin — JRENGS!';
-    if (ok) render();
-  }
+    document.title = ok ? baseTitle : 'Admin — JRENGS!';
+    if (ok) startOrders(); else stopOrders();
+  });
 
   /* ---------- login ---------- */
   var form = $('#login-form');
   var errEl = $('#login-err');
+  var submitBtn = $('#login-submit');
   var fails = 0;
   var lockedUntil = 0;
 
@@ -55,6 +124,12 @@
     this.setAttribute('aria-label', showPw ? 'Sembunyikan password' : 'Tampilkan password');
   });
 
+  function isCredentialError(err) {
+    var c = err && err.code ? String(err.code) : '';
+    return c === 'auth/invalid-credential' || c === 'auth/wrong-password' ||
+           c === 'auth/user-not-found' || c === 'auth/invalid-login-credentials';
+  }
+
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var now = Date.now();
@@ -64,36 +139,41 @@
     }
     var u = form.elements['username'].value.trim();
     var p = form.elements['password'].value;
-    if (u === ADMIN_USER && p === ADMIN_PASS) {
+    if (!u || !p) { errEl.textContent = 'Isi username dan password.'; return; }
+
+    errEl.textContent = '';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Memeriksa…';
+
+    store.login(u, p).then(function () {
       fails = 0;
-      errEl.textContent = '';
       form.reset();
-      setLoggedIn(true);
-      show();
-    } else {
-      fails++;
+    }).catch(function (err) {
       form.elements['password'].value = '';
-      if (fails >= 5) {
-        lockedUntil = Date.now() + 30000;
-        fails = 0;
-        errEl.textContent = 'Terlalu banyak percobaan. Coba lagi dalam 30 detik.';
-      } else {
-        errEl.textContent = 'Username atau password salah.';
+      if (isCredentialError(err)) {
+        fails++;
+        if (fails >= 5) {
+          lockedUntil = Date.now() + 30000;
+          fails = 0;
+          errEl.textContent = 'Terlalu banyak percobaan. Coba lagi dalam 30 detik.';
+          return;
+        }
       }
+      errEl.textContent = store.explain(err);
       form.elements['password'].focus();
-    }
+    }).then(function () {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Masuk';
+    });
   });
 
   $('#logout').addEventListener('click', function () {
-    setLoggedIn(false);
-    show();
+    store.logout();
   });
 
   /* ---------- dashboard state ---------- */
   var filter = 'semua';
   var query = '';
-
-  function orders() { return store.list(); }
 
   function renderStats(all) {
     var by = function (s) { return all.filter(function (o) { return o.status === s; }).length; };
@@ -175,23 +255,22 @@
       '</article>';
   }
 
-  function renderList(all) {
-    var list = visible(all);
+  function renderList() {
+    var list = visible(cache);
     var box = $('#orders');
     if (!list.length) {
       box.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="big" aria-hidden="true">📭</div><p>' +
-        (all.length ? 'Tidak ada pesanan yang cocok dengan filter.' : 'Belum ada pesanan masuk.') + '</p></div>';
+        (cache.length ? 'Tidak ada pesanan yang cocok dengan filter.' : 'Belum ada pesanan masuk.') + '</p></div>';
       return;
     }
     box.innerHTML = list.map(orderHTML).join('');
   }
 
   function render() {
-    var all = orders();
-    renderStats(all);
-    renderPrep(all);
-    renderChips(all);
-    renderList(all);
+    renderStats(cache);
+    renderPrep(cache);
+    renderChips(cache);
+    renderList();
   }
 
   /* ---------- interactions ---------- */
@@ -204,16 +283,17 @@
 
   $('#search').addEventListener('input', function () {
     query = this.value;
-    var all = orders();
-    renderList(all);
+    renderList();
   });
 
   $('#orders').addEventListener('change', function (e) {
     var sel = e.target.closest('[data-status]');
     if (!sel) return;
     var id = sel.closest('.order').dataset.id;
-    store.update(id, { status: sel.value });
-    render();
+    store.update(id, { status: sel.value }).catch(function (err) {
+      toast('Gagal mengubah status: ' + store.explain(err));
+      render();
+    });
   });
 
   $('#orders').addEventListener('click', function (e) {
@@ -221,8 +301,9 @@
     if (!del) return;
     var id = del.closest('.order').dataset.id;
     if (window.confirm('Hapus pesanan ' + id + '? Tindakan ini tidak bisa dibatalkan.')) {
-      store.remove(id);
-      render();
+      store.remove(id).catch(function (err) {
+        toast('Gagal menghapus: ' + store.explain(err));
+      });
     }
   });
 
@@ -234,7 +315,7 @@
   }
   $('#export').addEventListener('click', function () {
     var rows = [['No. Pesanan', 'Waktu', 'Nama', 'WhatsApp', 'Pesanan', 'Total (Rp)', 'Status', 'Catatan']];
-    visible(orders()).forEach(function (o) {
+    visible(cache).forEach(function (o) {
       rows.push([
         o.id, fmtDate(o.createdAt), o.name, o.phone,
         (o.items || []).map(function (it) { return it.qty + 'x ' + it.name + (it.level ? ' (Lv ' + it.level + ')' : ''); }).join('; '),
@@ -251,11 +332,4 @@
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   });
-
-  /* live updates when an order is placed in another tab of this browser */
-  window.addEventListener('storage', function (e) {
-    if (e.key === store.key && isLoggedIn()) render();
-  });
-
-  show();
 })();
